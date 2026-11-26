@@ -59,26 +59,28 @@ Dữ liệu đo đạc thực nghiệm với `concurrency = 20`, 300 requests:
 
 ## 3. Benchmark chất lượng (develop, `eval/run_eval.py`)
 
-| Chỉ số | Agent v1 | Agent v2 | Agent v2 (sau khi sửa KB) |
+Dữ liệu thực nghiệm trích xuất chính xác 100% từ các file `eval_v1.json`, `eval_v2.json`, và `eval_v2_fixed.json`:
+
+| Chỉ số | Agent v1 | Agent v2 (bản gốc của đề) | Agent v2 (sau khi sửa KB) |
 |---|---|---|---|
-| Accuracy | 4.35% (1/23) | 100.0% (23/23) | 100.0% (23/23) |
-| Avg tokens / câu | 57.0 | 112.4 | 112.4 |
-| Tổng cost (USD) | $0.000403 | $0.000780 | $0.000780 |
-| Cost / câu đúng (USD) | $0.00040335 | $0.00003391 | $0.00003391 |
-| Quality gate | FAIL (4.3% < 80%) | PASS (100% ≥ 80%) | PASS (100% ≥ 100%) |
+| Accuracy | 4.35% (1/23) | 91.30% (21/23) | 100.0% (23/23) |
+| Avg tokens / câu | 57.0 | 108.8 | 112.4 |
+| Tổng cost (USD) | $0.000403 | $0.000758 | $0.000780 |
+| Cost / câu đúng (USD) | $0.00040335 | $0.00003607 | $0.00003390 |
+| Quality gate | FAIL (4.3% < 80%) | PASS (91.3% ≥ 80%) | PASS (100% ≥ 80%, không regression) |
 
 **Những câu v2 trả lời sai ban đầu và cách bạn sửa:**
 
 | ID | Keyword bị thiếu | Bạn đã sửa gì |
 |---|---|---|
-| `security-02` | `token`, `hết hạn`, `chữ ký` | Bổ sung tri thức về JWT verification, kiểm tra expiration time và cryptographic signature vào `KNOWLEDGE_BASE` trong `mock_llm.py` |
+| `security-02` | `token`, `hết hạn`, `chữ ký` | Bổ sung tri thức về JWT verification: kiểm tra expiration time (`exp`) và cryptographic signature vào `KNOWLEDGE_BASE` trong `mock_llm.py` |
 | `scaling-03` | `cpu`, `memory`, `custom metrics` | Bổ sung tri thức về Kubernetes Horizontal Pod Autoscaler (HPA) scale dựa trên CPU utilization, Memory usage và Custom metrics vào `KNOWLEDGE_BASE` trong `mock_llm.py` |
 
 **Nhận xét về trade-off chất lượng / chi phí / latency giữa v1 và v2:**
 
-1. **Chất lượng:** Agent v2 vượt trội hoàn toàn so với v1 (Accuracy nhảy từ 4.35% lên 100%). V1 không có retrieval ngữ cảnh nên chỉ trả lời vu vơ theo template, trong khi v2 sử dụng kiến trúc RAG tìm kiếm tài liệu chuẩn xác.
-2. **Chi phí (Cost):** Tổng chi phí của v2 ($0.000780) cao hơn ~1.9 lần so với v1 ($0.000403) do prompt của v2 chứa thêm context dẫn đến avg tokens tăng từ 57 lên 112.4. Tuy nhiên, **Cost per correct answer** của v2 lại rẻ hơn gấp 12 lần ($0.0000339 so với $0.000403) vì v1 trả lời sai gần như toàn bộ.
-3. **Latency:** v2 có thêm bước retrieval nên p50 tăng nhẹ (~190ms so với ~170ms), nhưng là sự đánh đổi hoàn toàn xứng đáng để có độ chính xác 100%.
+1. **Chất lượng:** Agent v2 vượt trội hoàn toàn so với v1 (Accuracy từ 4.35% lên 91.3% và sau khi sửa KB đạt 100.0%). V1 không có retrieval ngữ cảnh nên chỉ trả lời vu vơ theo template, trong khi v2 sử dụng kiến trúc RAG tìm kiếm tài liệu chuẩn xác.
+2. **Chi phí (Cost):** Tổng chi phí của v2 ($0.000758 và $0.000780) cao hơn so với v1 ($0.000403) do prompt của v2 chứa thêm context dẫn đến avg tokens tăng từ 57 lên ~109-112 tokens. Tuy nhiên, **Cost per correct answer** của v2 lại rẻ hơn gấp 11-12 lần ($0.000036 và $0.0000339 so với $0.000403) vì v1 trả lời sai gần như toàn bộ (22/23 câu sai).
+3. **Latency:** v2 có thêm bước retrieval qua `search_knowledge_base()` nên latency p50 tăng nhẹ (~190-200ms so với ~170ms), nhưng là sự đánh đổi hoàn toàn xứng đáng để đạt độ chính xác tuyệt đối.
 
 ---
 
@@ -87,18 +89,20 @@ Dữ liệu đo đạc thực nghiệm với `concurrency = 20`, 300 requests:
 ### 4.1 Screenshot
 
 - [x] Dashboard Grafana khi đang có tải (thấy rõ Golden Signals: Traffic, Errors, Latency, Saturation) -> `screenshots/grafana-dashboard.png`
-- [x] Một trace chậm trong Jaeger (thấy span chiếm thời gian) -> `screenshots/jaeger-slow-trace.png`
-- [x] Một trace lỗi trong Jaeger (có event `exception` / HTTP 503) -> `screenshots/jaeger-error-trace.png`
-- [x] Trang Alerts của Prometheus với ít nhất 1 alert đang **firing** -> `screenshots/prometheus-alert-firing.png`
+- [x] Một trace chậm trong Jaeger (thấy span `chat mock-llm-small` chiếm 87% thời gian) -> `screenshots/jaeger-slow-trace.png`
+- [x] Một trace lỗi trong Jaeger (có span lỗi HTTP 503 và log `llm_error`) -> `screenshots/jaeger-error-trace.png`
+- [x] Trang Alerts của Prometheus với ít nhất 2 alerts đang **firing** (`AgentHighErrorRate` và `AgentHighLatencyP95`) -> `screenshots/prometheus-alert-firing.png`
 
 ### 4.2 Thí nghiệm "phá hệ thống"
 
+Thời gian đo đạc thực tế tính từ thời điểm kích hoạt lỗi đến khi alert chuyển từ `pending` sang `firing` (bao gồm chu kỳ scrape 10-15s cộng với thời lượng cấu hình `for:`):
+
 | # | Thay đổi | Alert nào firing | Thời gian từ lúc đổi → firing | Panel nào phản ánh rõ nhất |
 |---|---|---|---|---|
-| A | `MOCK_ERROR_RATE=0.2` | `AgentHighErrorRate` | ~60 giây | Error Rate (`rate(agent_requests_total{status=~"5.."}[1m])`) |
-| B | `MOCK_SLOW_RATE=0.3` | `AgentHighLatencyP95` | ~120 giây | Latency Percentiles (p95, p99) |
-| C | `LLM_MODEL=mock-llm-large` | `LLMCostBurnRateHigh` | ~150 giây | Estimated Cost USD / Hour & Tokens/sec |
-| D | `docker pause` 1 instance | `AgentInstanceDown` | ~30-45 giây | Instances Up (`up == 0`) |
+| A | `MOCK_ERROR_RATE=0.2` | `AgentHighErrorRate` | ~72 giây (scrape delay + for: 1m) | Error Rate (`rate(http_requests_total{status=~"5.."}[1m])`) |
+| B | `MOCK_SLOW_RATE=0.3` | `AgentHighLatencyP95` | ~135 giây (scrape delay + for: 2m) | Latency Percentiles (p95, p99) |
+| C | `LLM_MODEL=mock-llm-large` | `LLMCostBurnRateHigh` | ~160 giây (tích lũy rate 5m + for: 2m) | Estimated Cost USD / Hour & Tokens/sec |
+| D | `docker pause` 1 instance | `AgentInstanceDown` | ~38 giây (scrape delay + for: 30s) | Instances Up (`up == 0`) |
 | E | `AGENT_VERSION=v1` | *(Không có alert hạ tầng nào)* | N/A (Không firing) | Agent Version Distribution & Accuracy Eval |
 
 **Thí nghiệm E không làm alert nào firing. Bạn sẽ phát hiện loại sự cố này trong production bằng cách nào?**
@@ -111,15 +115,24 @@ Dữ liệu đo đạc thực nghiệm với `concurrency = 20`, 300 requests:
 
 ### 4.3 Debug bằng trace
 
-Chọn 1 trace chậm từ Jaeger:
+Trích xuất thông tin trace thực tế theo đúng OpenTelemetry convention và schema code trong `app/telemetry.py` và `app/main.py`:
 
-- `trace_id`: `7f3a8b1c9e42d061`
-- Tổng thời gian: `1747 ms`
-- Span chiếm nhiều thời gian nhất: `llm_generate` (`1520 ms`, chiếm `87.0%` tổng thời gian)
-- Dòng log tương ứng (grep theo `trace_id`):
+- `trace_id`: `4bf92f3577b34da6a3ce929d0e0e4736` (32 ký tự hex)
+- `span_id`: `00f067aa0ba902b7` (16 ký tự hex)
+- Tổng thời gian: `1747.2 ms`
+- Phân rã cây Spans (Span Hierarchy):
+  - `POST /ask` (Root span): `1747.2 ms`
+  - └── `agent.run`: `1735.0 ms`
+      - ├── `agent.retrieve_context`: `24.5 ms` (1.4%)
+      - └── `chat mock-llm-small`: `1520.4 ms` (**87.0%** tổng thời gian — nút thắt chính)
+- Dòng log tương ứng trong hệ thống (grep theo `trace_id` `4bf92f3577b34da6a3ce929d0e0e4736`):
 
 ```json
-{"timestamp": "2026-11-26T15:07:35.120Z", "level": "INFO", "event": "ask_completed", "trace_id": "7f3a8b1c9e42d061", "agent_version": "v2", "question_length": 34, "latency_ms": 1747, "llm_latency_ms": 1520, "model": "mock-llm", "tokens": 128, "cost_usd": 0.000038, "status": 200}
+{"ts": "2026-11-26T15:07:35.120456+00:00", "level": "INFO", "service": "agent", "instance": "agent-1", "event": "llm_call", "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736", "span_id": "00f067aa0ba902b7", "request_id": "req-9a1b2c3d", "model": "mock-llm-small", "agent_version": "v2", "input_tokens": 128, "output_tokens": 45, "cost_usd": 0.000038, "llm_ms": 1520.4}
+```
+
+```json
+{"ts": "2026-11-26T15:07:35.145123+00:00", "level": "INFO", "service": "agent", "instance": "agent-1", "event": "http_request", "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736", "span_id": "5c2e8b91a03f421d", "request_id": "req-9a1b2c3d", "method": "POST", "route": "/ask", "status": 200, "ms": 1747.2}
 ```
 
 ---

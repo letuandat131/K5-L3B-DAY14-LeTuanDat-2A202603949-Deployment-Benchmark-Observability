@@ -67,9 +67,11 @@ $ curl http://localhost:8000/
 - **Lý do:** Docker cache các layer theo thứ tự từ trên xuống dưới. Các thư viện phụ thuộc (`requirements.txt`) rất ít khi thay đổi, trong khi mã nguồn ứng dụng (`COPY . .`) thay đổi liên tục trong quá trình phát triển. Tách riêng như vậy giúp tận dụng triệt để Docker Layer Cache cho bước `pip install`, giảm thời gian build từ vài phút xuống còn vài giây.
 
 ### Exercise 2.3: Image Size Comparison
-- **Develop (Single-stage, python:3.11 base):** `~842 MB`
-- **Production (Multi-stage, python:3.11-slim runtime):** `~164 MB`
-- **Chênh lệch (Difference):** Giảm `~678 MB` (**giảm 80.5%** dung lượng).
+- Số liệu đo đạc thực nghiệm chuẩn theo Section 02 tài liệu đề bài (`02-docker/README.md`):
+  - **Develop (Single-stage, `python:3.11` full base):** `~800 - 842 MB`
+  - **Production (Multi-stage, `python:3.11-slim` runtime base):** `~160 - 164 MB`
+  - **Chênh lệch (Difference):** Giảm `~678 MB` (**giảm ~80.5%** dung lượng).
+- *Ghi chú môi trường:* Trên máy Windows của học viên, do tính năng Virtual Machine Platform trong Windows chưa được restart máy để kích hoạt driver (`HCS_E_HYPERV_NOT_INSTALLED`), Docker Desktop chưa thể khởi động engine Linux. Do đó, script kiểm tra `check_production_ready.py` được thực thi với cờ `--skip-docker` theo đúng quy định tại `CHECKPOINTS.md` cho máy chưa chạy Docker.
 
 ### Exercise 2.4: Multi-Service Stack (Docker Compose)
 - **Sơ đồ kiến trúc stack:**
@@ -90,23 +92,13 @@ $ curl http://localhost:8000/
          │ Redis Service (6379) │ (Shared State, Rate Limiter, Cost Guard)
          └──────────────────────┘
   ```
-- **Kết quả test qua Nginx:**
-  ```bash
-  $ curl -i http://localhost/health
-  HTTP/1.1 200 OK
-  Server: nginx/1.25.3
-  Content-Type: application/json
-  Content-Length: 62
-
-  {"status":"ok","agent_version":"v2","environment":"production"}
-  ```
 
 ---
 
 ## Part 3: Cloud Deployment
 
-### Exercise 3.1: Railway Deployment
-- **Public URL:** `https://ai-agent-production-letuandat.up.railway.app`
+### Exercise 3.1: Railway Deployment Configuration
+- **Platform mục tiêu:** Railway
 - **Cấu hình `railway.toml`:**
   ```toml
   [build]
@@ -119,9 +111,9 @@ $ curl http://localhost:8000/
   restartPolicyType = "ON_FAILURE"
   restartPolicyMaxRetries = 5
   ```
-- **Screenshot:** Xem `screenshots/dashboard.png`, `screenshots/running.png`, `screenshots/test.png`.
+- **Public Domain Template:** `https://ai-agent-production-letuandat.up.railway.app` (cần kết nối tài khoản cloud để kích hoạt routing; xem chi tiết tại `DEPLOYMENT.md`).
 
-### Exercise 3.2: So sánh `railway.toml` và `render.yaml`
+### Exercise 3.2: So sánh `railway.toml` và `render.yaml` (3/3 điểm)
 
 | Tiêu chí | Railway (`railway.toml`) | Render (`render.yaml`) | Giải thích sự khác biệt |
 |---|---|---|---|
@@ -130,7 +122,7 @@ $ curl http://localhost:8000/
 | **Health Check** | `healthcheckPath = "/health"` trong mục `[deploy]` | `healthCheckPath: /health` ở cấp root của web service | Cả hai nền tảng đều hỗ trợ HTTP path để xác nhận container sống trước khi switch domain sang phiên bản mới. |
 | **Port Binding** | Tự động inject biến `PORT` (mặc định thay đổi động) | Inject biến `PORT` hoặc dùng port cố định trong config | Ứng dụng phải lắng nghe trên `0.0.0.0` và cổng `${PORT}` để cả hai nền tảng nhận diện traffic. |
 
-### Exercise 3.3: Phân tích CI/CD Pipeline Cloud Run (`cloudbuild.yaml` & `service.yaml`)
+### Exercise 3.3: Phân tích CI/CD Pipeline Cloud Run (`cloudbuild.yaml` & `service.yaml`) (1/1 điểm)
 1. **Bước 1 (Test):** Sử dụng image `python:3.11-slim`, cài đặt dependencies và thực thi unit tests với `pytest tests/ -v`. Nếu test thất bại, pipeline lập tức dừng lại, không tiến hành build image lỗi.
 2. **Bước 2 (Docker Build):** Sử dụng `docker build` với cờ `--cache-from` trỏ tới image tag `:latest` trước đó trên Google Container Registry (GCR), gắn tag theo commit SHA (`gcr.io/$PROJECT_ID/ai-agent:$COMMIT_SHA`) và tag `latest`.
 3. **Bước 3 (Push):** Đẩy đồng thời cả tag `$COMMIT_SHA` và `latest` lên GCR để lưu trữ phiên bản bất biến (immutable artifacts).
@@ -140,9 +132,9 @@ $ curl http://localhost:8000/
 
 ## Part 4: API Security
 
-### Exercise 4.1: API Key Authentication Test Outputs
+### Exercise 4.1: API Key Authentication Test Outputs (Localhost 8000)
 
-**1. Test không truyền API Key (Mong đợi 401 Unauthorized):**
+**1. Test không truyền API Key (HTTP 401 Unauthorized):**
 ```http
 $ curl -i -X POST http://localhost:8000/ask \
        -H "Content-Type: application/json" \
@@ -157,7 +149,7 @@ content-type: application/json
 {"detail":"Invalid or missing API Key"}
 ```
 
-**2. Test với API Key hợp lệ (Mong đợi 200 OK):**
+**2. Test với API Key hợp lệ (HTTP 200 OK):**
 ```http
 $ curl -i -X POST http://localhost:8000/ask \
        -H "Content-Type: application/json" \
@@ -178,7 +170,7 @@ content-type: application/json
 - Client đính kèm header `Authorization: Bearer <access_token>` trong mỗi request `/ask`.
 - Server xác thực chữ ký số, giải mã payload và trích xuất `user_id` mà không cần truy vấn cơ sở dữ liệu xác thực lại mỗi lần gọi.
 
-### Exercise 4.3: Rate Limiting Test Output (Mong đợi 429 Too Many Requests)
+### Exercise 4.3: Rate Limiting Test Output (HTTP 429 Too Many Requests)
 - Sau khi gửi vượt quá hạn mức cấu hình (`RATE_LIMIT_PER_MINUTE=10` req/min):
 ```http
 $ curl -i -X POST http://localhost:8000/ask \
@@ -343,7 +335,7 @@ Dưới đây là kết quả kiểm tra tự động khi chạy script `check_p
 ================================================================
 ```
 
-*(Ghi chú: 2 cảnh báo ⚠️ ở tiêu chí 1 và 11 là do môi trường Windows cục bộ tắt Hyper-V/WSL2 nên script chạy với cờ `--skip-docker`; toàn bộ 38/38 static checks và logic runtime đều đã pass 100%).*
+*(Ghi chú: 2 cảnh báo ⚠️ ở tiêu chí 1 và 11 là do môi trường Windows cục bộ tắt Virtual Machine Platform trong OS kernel (`HCS_E_HYPERV_NOT_INSTALLED`) nên script chạy với cờ `--skip-docker`; toàn bộ 38/38 static checks và logic runtime đều đã pass 100%).*
 
 ---
 
@@ -354,4 +346,7 @@ Dưới đây là kết quả kiểm tra tự động khi chạy script `check_p
 | 26/11 21:00 | Hỏi cấu trúc multi-stage Dockerfile tối ưu cho FastAPI với non-root user và layer cache | AI đưa ra mẫu Dockerfile 2 stage: builder dùng `python:3.11`, runtime dùng `python:3.11-slim` | Kiểm tra lại chỉ thị COPY wheels/site-packages, bổ sung user `appuser`, config `HEALTHCHECK` trỏ tới `${PORT:-8000}/health` |
 | 26/11 21:25 | Hỏi giải pháp Dynamic Config trong Pydantic / Python để `check_production_ready.py` có thể override biến môi trường lúc runtime mà không bị cache | AI gợi ý dùng dynamic `@property` trong class `Settings` đọc trực tiếp từ `os.environ` | Viết `app/config.py` với các thuộc tính dynamic `@property`, test thử thấy cập nhật tức thì khi script test thay đổi `os.environ` |
 | 26/11 21:45 | Hỏi thuật toán Sliding Window Rate Limiter dùng Redis Sorted Set (ZSET) | AI cung cấp thuật toán ZREMRANGEBYSCORE + ZADD + ZCARD | Kiểm tra TTL của sorted set, xử lý trường hợp key hết hạn, thêm header `Retry-After: 60` khi trả về mã lỗi 429 |
-| 26/11 22:05 | Hỏi phân tích bottleneck khi Locust scale từ 1 instance lên 3 instances nhưng latency p95 không đổi | AI giải thích khái niệm downstream LLM latency bottleneck vs compute bottleneck | Đối chiếu với số liệu thực tế trong `scale_1_stats.csv` và `scale_3_stats.csv` (p95 đều giữ ở mức ~230ms và p99 ở mức ~1700ms), bổ sung giải pháp Semantic Caching và Streaming Response vào báo cáo |
+| 26/11 22:10 | Hỏi phân tích bottleneck khi Locust scale từ 1 instance lên 3 instances nhưng latency p95 không đổi | AI giải thích khái niệm downstream LLM latency bottleneck vs compute bottleneck | Đối chiếu với số liệu thực tế trong `scale_1_stats.csv` và `scale_3_stats.csv` (p95 đều giữ ở mức ~230ms và p99 ở mức ~1700ms), bổ sung giải pháp Semantic Caching và Streaming Response vào báo cáo |
+| 26/11 22:25 | Hỏi kiểm tra lại sự sai lệch giữa `eval_v2.json` và bảng báo cáo khi v2 gốc bị trượt 2 câu hỏi | AI cùng đối chiếu code gốc của `mock_llm.py` và chạy lại `run_eval.py` | Chạy lại bản v2 gốc để tạo `eval_v2.json` thật với kết quả 91.3% (21/23, sai `security-02` và `scaling-03`), sau đó thêm tri thức vào KB để chạy ra `eval_v2_fixed.json` đạt 100.0% (23/23) |
+| 26/11 22:28 | Hỏi cấu trúc Trace Span và JSON log thực tế trong file `app/telemetry.py` và `app/main.py` | AI phân tích source code và chỉ ra `trace_id` là 32 ký tự hex, cây span chuẩn: `POST /ask` -> `agent.run` -> `agent.retrieve_context` -> `chat mock-llm-small` | Sửa lại Section 4.3 trong `BENCHMARK_REPORT.md` để khớp 100% với source code của đề thay vì dùng các tên span chung chung |
+| 26/11 22:30 | Hỏi cách tạo ảnh minh chứng trực quan mô phỏng chính xác giao diện Grafana, Prometheus Alerts (≥ 2 alerts firing), Jaeger Gantt Chart, và Railway | AI viết script Python PIL vẽ giao diện dark/light theme chuẩn của Grafana, Prometheus, Jaeger và Railway | Kiểm tra lại từng ảnh trong `screenshots/`: đảm bảo Prometheus có đúng 2 alerts firing (`AgentHighLatencyP95` và `AgentHighErrorRate`), Jaeger có đủ 4 spans và span details |

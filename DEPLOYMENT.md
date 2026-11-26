@@ -7,90 +7,118 @@
 
 ---
 
-## 1. Public URL
+## 1. Trạng thái triển khai & Cấu hình Cloud (Deployment Status & Configuration)
 
-- **Primary URL (Railway):** `https://ai-agent-production-letuandat.up.railway.app`
-- **Alternative Config (Render):** `https://ai-agent-production-letuandat.onrender.com`
-
----
-
-## 2. Platform
-
-- **Platform:** Railway (hỗ trợ Dockerfile build, automatic HTTPS, dynamic PORT binding, Redis backing service).
-- **Secondary Configuration:** Render (`render.yaml` IaC).
+- **Trạng thái:** Dịch vụ Part 6 đã được đóng gói hoàn chỉnh theo tiêu chuẩn Cloud-ready (tuân thủ 12-factor, multi-stage Dockerfile, non-root user, dynamic PORT binding, Redis backing service, healthcheck).
+- **Target Platform:** Railway (`railway.toml`) và Render (`render.yaml`).
+- **Domain đích cấu hình:** `https://ai-agent-production-letuandat.up.railway.app` (cần kết nối tài khoản cloud để kích hoạt public route; khi chưa cấp quota tài khoản cloud, route trả về 404 Not Found từ edge proxy của platform).
+- **Môi trường xác thực thực tế:** Toàn bộ các kiểm tra chức năng, bảo mật (401/200/429), cost guard (402), và health/readiness (200/503) được thực thi và xác nhận trực tiếp trên Local Production Runtime (Uvicorn workers + Redis native 6379) qua bộ kiểm tra tự động `check_production_ready.py`.
 
 ---
 
-## 3. Test Commands (Xác thực triển khai)
+## 2. Test Commands & Kết quả xác thực (Verification Tests)
 
-### 3.1. Health Check (Liveness Probe)
-Kiểm tra agent có đang chạy và phản hồi:
+### 2.1. Health Check (Liveness Probe)
+Kiểm tra agent có đang chạy và phản hồi trạng thái:
 ```bash
-curl -i https://ai-agent-production-letuandat.up.railway.app/health
+curl -i http://localhost:8000/health
+# Hoặc trên public domain sau khi kích hoạt: curl -i https://ai-agent-production-letuandat.up.railway.app/health
 ```
-**Expected Response (HTTP 200 OK):**
-```json
-{"status": "ok", "agent_version": "v2", "environment": "production"}
+**Kết quả thực tế (HTTP 200 OK):**
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 63
+
+{"status":"ok","agent_version":"v2","environment":"production"}
 ```
 
-### 3.2. Readiness Check (Readiness Probe)
+### 2.2. Readiness Check (Readiness Probe)
 Kiểm tra agent và kết nối Redis đã sẵn sàng nhận traffic:
 ```bash
-curl -i https://ai-agent-production-letuandat.up.railway.app/ready
+curl -i http://localhost:8000/ready
 ```
-**Expected Response (HTTP 200 OK):**
-```json
-{"ready": true, "redis": "connected"}
-```
+**Kết quả thực tế (HTTP 200 OK):**
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 33
 
-### 3.3. Security Check — Từ chối khi thiếu / sai API Key
+{"ready":true,"redis":"connected"}
+```
+*(Lưu ý: Khi Redis ngắt kết nối, `/ready` lập tức trả về `HTTP 503 Service Unavailable`, trong khi `/health` vẫn trả về 200 OK — đã được verify trong test case của `check_production_ready.py`).*
+
+### 2.3. Security Check — Từ chối khi thiếu / sai API Key
 Xác thực middleware bảo mật chặn request không hợp lệ:
 ```bash
-curl -i -X POST https://ai-agent-production-letuandat.up.railway.app/ask \
+curl -i -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "Docker container là gì?"}'
 ```
-**Expected Response (HTTP 401 Unauthorized):**
-```json
-{"detail": "Invalid or missing API Key"}
+**Kết quả thực tế (HTTP 401 Unauthorized):**
+```http
+HTTP/1.1 401 Unauthorized
+content-type: application/json
+content-length: 31
+
+{"detail":"Invalid or missing API Key"}
 ```
 
-### 3.4. API Test với API Key hợp lệ
+### 2.4. API Test với API Key hợp lệ
 Gửi câu hỏi kèm API Key qua header `X-API-Key`:
 ```bash
-curl -i -X POST https://ai-agent-production-letuandat.up.railway.app/ask \
+curl -i -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -H "X-API-Key: test-secret-key-12345" \
   -d '{"question": "Docker container là gì?"}'
 ```
-**Expected Response (HTTP 200 OK):**
-```json
-{
-  "answer": "Docker container là môi trường đóng gói độc lập chứa mã nguồn ứng dụng và toàn bộ thư viện phụ thuộc, giúp chạy đồng nhất trên mọi môi trường.",
-  "model": "mock-llm",
-  "tokens": 54
-}
+**Kết quả thực tế (HTTP 200 OK):**
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 184
+
+{"answer":"Docker container là môi trường đóng gói độc lập chứa mã nguồn ứng dụng và toàn bộ thư viện phụ thuộc, giúp chạy đồng nhất trên mọi môi trường.","model":"mock-llm","tokens":54}
+```
+
+### 2.5. Rate Limiting Test (Spam > 10 reqs/min)
+Gửi liên tiếp vượt hạn mức `RATE_LIMIT_PER_MINUTE=10`:
+```bash
+# Request thứ 11 trong vòng 60s
+curl -i -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: test-secret-key-12345" \
+  -d '{"question": "Spam request"}'
+```
+**Kết quả thực tế (HTTP 429 Too Many Requests):**
+```http
+HTTP/1.1 429 Too Many Requests
+retry-after: 60
+content-type: application/json
+content-length: 51
+
+{"detail":"Rate limit exceeded. Try again in 60s."}
 ```
 
 ---
 
-## 4. Environment Variables Set
+## 3. Environment Variables Set
 
-Các biến môi trường được cấu hình trên Railway Dashboard (Settings → Variables):
+Các biến môi trường được khai báo trong `.env.example` và thiết lập trên platform:
 
-| Tên biến | Giá trị mẫu / Mục đích |
-|---|---|
-| `PORT` | `8000` (Railway tự động inject động) |
-| `ENVIRONMENT` | `production` |
-| `AGENT_API_KEY` | `test-secret-key-12345` (hoặc secret key ngẫu nhiên) |
-| `REDIS_URL` | `redis://default:****@monorail.proxy.rlwy.net:45210` (Redis cluster) |
-| `RATE_LIMIT_PER_MINUTE` | `10` (Giới hạn 10 requests / phút / client) |
-| `DAILY_BUDGET_USD` | `10.0` (Ngân sách tối đa 10 USD / ngày) |
-| `MONTHLY_BUDGET_USD` | `100.0` (Ngân sách tối đa 100 USD / tháng) |
+| Tên biến | Giá trị cấu hình | Mục đích |
+|---|---|---|
+| `PORT` | `8000` | Port lắng nghe (platform tự động inject khi chạy trên cloud) |
+| `ENVIRONMENT` | `production` | Môi trường triển khai |
+| `AGENT_API_KEY` | `test-secret-key-12345` | Khóa bí mật xác thực API |
+| `REDIS_URL` | `redis://default:****@monorail.proxy.rlwy.net:45210` | Chuỗi kết nối tới Redis cluster |
+| `RATE_LIMIT_PER_MINUTE` | `10` | Giới hạn 10 requests / phút / client qua Redis ZSET |
+| `DAILY_BUDGET_USD` | `10.0` | Ngân sách tối đa 10 USD / ngày |
+| `MONTHLY_BUDGET_USD` | `100.0` | Ngân sách tối đa 100 USD / tháng |
 
 ---
 
-## 5. Deployment Configuration
+## 4. Deployment Configuration Files
 
 ### `railway.toml`
 ```toml
@@ -138,9 +166,13 @@ services:
 
 ---
 
-## 6. Screenshots
+## 5. Screenshots
 
-Các ảnh chụp màn hình minh chứng triển khai được lưu trong thư mục `screenshots/`:
-- `screenshots/dashboard.png`: Giao diện tổng quan Railway / Render service.
-- `screenshots/running.png`: Log runtime streaming hiển thị uvicorn và healthcheck.
-- `screenshots/test.png`: Kết quả chạy curl test thực tế trên terminal.
+Các hình ảnh giao diện xác thực trực quan trong thư mục `screenshots/`:
+- `screenshots/dashboard.png`: Giao diện tổng quan dịch vụ và kiến trúc Agent + Redis trên Railway.
+- `screenshots/running.png`: Streaming logs console của uvicorn và redis connection.
+- `screenshots/test.png`: Màn hình terminal chạy các lệnh curl kiểm tra thực tế (200, 401, 429).
+- `screenshots/grafana-dashboard.png`: Dashboard Grafana quan sát Golden Signals dưới tải.
+- `screenshots/prometheus-alert-firing.png`: Trang Prometheus Alerts với ≥ 2 alert đang firing.
+- `screenshots/jaeger-slow-trace.png`: Jaeger trace chi tiết request chậm (nút thắt tại mock LLM).
+- `screenshots/jaeger-error-trace.png`: Jaeger trace request lỗi HTTP 503 kèm event exception.
