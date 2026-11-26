@@ -86,7 +86,7 @@ Dữ liệu thực nghiệm trích xuất chính xác từ các file `reports/ev
 
 ## 4. Observability stack (production)
 
-> **Trạng thái môi trường:** Chưa chạy được stack Docker Compose (`prometheus`, `grafana`, `jaeger`, `nginx`, `locust`) trên máy cục bộ do lỗi WSL2 / Hyper-V (`HCS_E_HYPERV_NOT_INSTALLED` — `hypervisorlaunchtype` đang tắt trong Windows BCD). Vì vậy các mục ảnh chụp, đo thời gian firing thực tế và trace từ Jaeger dưới đây **chưa có dữ liệu chạy thật** và được để trống trung thực theo đúng `RULES.md`.
+> **Trạng thái môi trường:** Sau khi bật lại `hypervisorlaunchtype=auto` và restart máy lúc 23:43, Docker 29.5.3 đã khởi động và kéo/chạy được các container `prometheus`, `grafana`, `jaeger`, `nginx`, `locust`, tuy nhiên container `production-agent` gặp lỗi `ModuleNotFoundError: No module named 'uvicorn'` (do `production/Dockerfile` có sẵn dùng `useradd -d /app` khác với `/home/agent/.local`) sát giờ nộp bài 23:59 nên chưa kịp chạy đủ thí nghiệm chaos và chụp ảnh thật. Toàn bộ các mục chưa có dữ liệu chạy thật đều để trống trung thực theo đúng `RULES.md`.
 
 ### 4.1 Screenshot
 

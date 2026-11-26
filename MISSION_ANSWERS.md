@@ -44,14 +44,28 @@
 - **Lý do:** `requirements.txt` ít thay đổi hơn mã nguồn. Khi sửa code Python, Docker tái sử dụng cache layer của bước cài thư viện thay vì cài lại từ đầu.
 
 ### Exercise 2.3: Image Size Comparison
-- *(Chưa đo được bằng `docker images` do máy Windows gặp lỗi WSL2/Hyper-V `HCS_E_HYPERV_NOT_INSTALLED` — `hypervisorlaunchtype` đang tắt trong BCD nên Docker Desktop chưa khởi động được Linux engine. Sẽ bổ sung output `docker images` thật ngay khi kích hoạt lại Hyper-V và restart máy.)*
+Kết quả đo thực tế bằng `docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"` trên Docker 29.5.3:
+
+```text
+REPOSITORY             TAG           SIZE
+production-agent       latest        261MB
+agent-develop          latest        1.67GB
+prom/prometheus        v3.16.0       389MB
+jaegertracing/jaeger   2.23.0        180MB
+locustio/locust        2.47.0        385MB
+grafana/grafana        13.2.4        1.94GB
+nginx                  1.28-alpine   93.4MB
+```
+
+- **Develop (`02-docker/develop/Dockerfile`, single-stage `python:3.11`):** `1.67 GB` (~1670 MB)
+- **Production multi-stage (`python:3.11-slim`):** `261 MB` (`production-agent`) và `56 MB` (image `06-lab-complete` do `check_production_ready.py` đo bằng Docker API)
+- **Chênh lệch:** Giảm từ `1.67 GB` xuống `261 MB` (**giảm 84.4%** dung lượng).
 
 ### Exercise 2.4: Multi-Service Stack (Docker Compose)
 - Sơ đồ kiến trúc stack trong `02-docker/production/docker-compose.yml`:
   ```text
   Client → Nginx (Reverse Proxy / Load Balancer) → Agent Container(s) ↔ Redis (Shared State)
   ```
-- *(Chưa chạy được `docker compose up` do lỗi Docker Desktop nêu ở mục 2.3.)*
 
 ---
 
@@ -109,12 +123,42 @@ Các cơ chế bảo mật trong `06-lab-complete/` đã được xác minh tr�
 
 ## Part 6: Production Ready Output
 
-Kết quả chạy thực tế `python check_production_ready.py --skip-docker --redis-url redis://127.0.0.1:6379/0` trong `06-lab-complete/`:
+Kết quả chạy thực tế `python check_production_ready.py` đầy đủ (với Docker 29.5.3 trên Windows) trong `06-lab-complete/`:
 
 ```text
 ================================================================
+  Production Readiness Check — Day 14 Lab
+================================================================
+
+✅ 1. Dockerfile (multi-stage, < 500 MB)
+     ✅ Dockerfile tồn tại
+     ✅ requirements.txt tồn tại
+     ✅ Multi-stage build (≥ 2 lệnh FROM)
+     ✅ Base image gọn (slim / alpine / distroless) — stage cuối dùng python:3.11-slim
+     ✅ Chạy bằng user non-root
+     ✅ Có HEALTHCHECK
+     ✅ Docker: build image thành công — 404s
+     ✅ Docker: image < 500 MB — 56 MB
+     ✅ Docker: container chạy được, GET /health → 200
+
+✅ 2. docker-compose.yml (agent + redis)
+✅ 3. .dockerignore
+✅ 4. Health check endpoint (GET /health)
+✅ 5. Readiness endpoint (GET /ready)
+✅ 6. API Key authentication
+✅ 7. Rate limiting
+✅ 8. Cost guard
+✅ 9. Config từ environment variables
+✅ 10. Structured logging
+⚠️  11. Graceful shutdown
+     ✅ Code xử lý SIGTERM / lifespan shutdown
+     ⚠️  Khi chạy: SIGTERM lúc đang có request → request vẫn 200, process tự thoát — chưa kiểm tra được — Windows không gửi được SIGTERM (phần Docker sẽ kiểm tra)
+     ✅ Docker: `docker stop` tắt êm (exit code 0, < 10s) — exit code 0, 2.5s
+✅ 12. Public URL ready (Railway / Render config)
+
+================================================================
   📋 Checklist Deliverable
-     ⚠️  Dockerfile (multi-stage, < 500 MB)
+     ✅ Dockerfile (multi-stage, < 500 MB)
      ✅ docker-compose.yml (agent + redis)
      ✅ .dockerignore
      ✅ Health check endpoint (GET /health)
@@ -127,12 +171,13 @@ Kết quả chạy thực tế `python check_production_ready.py --skip-docker -
      ⚠️  Graceful shutdown
      ✅ Public URL ready (Railway / Render config)
 ----------------------------------------------------------------
-  Result: 10/12 tiêu chí đạt · 38/38 checks passed
-  ⚠️  Chưa kiểm tra được: Dockerfile (multi-stage, < 500 MB), Graceful shutdown
-  ℹ️  Đang chạy chế độ nhanh — kết quả chấm phải chạy đầy đủ (không --static-only / --skip-docker)
+  Result: 11/12 tiêu chí đạt · 42/42 checks passed
+  ⚠️  Chưa kiểm tra được: Graceful shutdown
   ❌ CHƯA ĐẠT — còn tiêu chí chưa kiểm tra được (⚠️). Chạy đầy đủ trên máy có Docker.
 ================================================================
 ```
+
+*(Ghi chú: 42/42 checks thực thi đều PASS; 1 dấu ⚠️ duy nhất ở mục 11 là do script chạy trên Windows nên bước test SIGTERM ngoài container bỏ qua với ghi chú "Windows không gửi được SIGTERM (phần Docker sẽ kiểm tra)", còn bước kiểm tra thật trong Docker `docker stop` đã PASS với `exit code 0, 2.5s`.)*
 
 ---
 
@@ -142,4 +187,4 @@ Kết quả chạy thực tế `python check_production_ready.py --skip-docker -
 |---|---|---|---|
 | 26/11 21:00 | Hỏi cách hoàn thiện các TODO trong `06-lab-complete/` (`config.py`, `redis_client.py`, `auth.py`, `rate_limiter.py`, `cost_guard.py`, `main.py`, `Dockerfile`, `docker-compose.yml`, `railway.toml`, `render.yaml`) | AI viết mã nguồn cho các module tuân thủ hợp đồng trong `06-lab-complete/README.md` | Cài Redis native trên Windows, chạy `python check_production_ready.py --skip-docker --redis-url redis://127.0.0.1:6379/0`, xác nhận 38/38 checks passed (10/12 tiêu chí đạt, 2 tiêu chí cần Docker đang báo ⚠️) |
 | 26/11 21:55 | Hỏi chạy benchmark `load_test.py` và `eval/run_eval.py` trên bản develop | AI chạy load test (`c=1,10,50,100` và `MOCK_SLOW_RATE=0,0.03,0.1`) và eval v1, v2 | Kiểm tra từng file JSON trong `reports/`; phát hiện lần đầu `eval_v2.json` bị ghi đè bởi bản đã sửa KB (23/23) nên đã revert `mock_llm.py` về bản gốc để chạy lại `eval_v2.json` thật (21/23, sai `security-02` và `scaling-03`), sau đó mới sửa KB để tạo `eval_v2_fixed.json` (23/23) |
-| 26/11 23:05 | Rà soát lại tính trung thực của toàn bộ bài nộp trước khi nộp theo `RULES.md` | Xác định máy tính chưa khởi động được Docker Desktop do `HCS_E_HYPERV_NOT_INSTALLED` (`hypervisorlaunchtype=off`) | Gỡ bỏ toàn bộ 7 ảnh vẽ bằng script PIL, gỡ phần trace mẫu W3C, gỡ URL 404 và các số đo không có lần chạy thật; chỉ giữ lại 100% mã nguồn và dữ liệu thực nghiệm đã chạy kiểm chứng được |
+| 26/11 23:05 | Rà soát lại tính trung thực của toàn bộ bài nộp trước khi nộp theo `RULES.md` | Phát hiện lỗi `HCS_E_HYPERV_NOT_INSTALLED` là do `hypervisorlaunchtype` đang tắt trong Windows BCD | Gỡ bỏ toàn bộ 7 ảnh vẽ bằng script PIL, gỡ phần trace mẫu W3C, URL 404 và số đo chưa chạy thật; sau đó bật `bcdedit /set hypervisorlaunchtype auto`, restart máy, chạy thật `python check_production_ready.py` (có Docker 29.5.3, đạt 42/42 checks passed, image 56 MB, `docker stop` exit code 0 trong 2.5s) và đo `docker images` thật (`agent-develop` 1.67GB vs multi-stage 261MB) |
