@@ -9,4 +9,25 @@ services:
   agent:
     build: .
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - AGENT_API_KEY=${AGENT_API_KEY:-dev-key}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-10}
+      - DAILY_BUDGET_USD=${DAILY_BUDGET_USD:-1.0}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3

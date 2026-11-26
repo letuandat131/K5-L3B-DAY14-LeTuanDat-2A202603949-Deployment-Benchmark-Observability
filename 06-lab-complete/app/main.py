@@ -6,42 +6,113 @@ Hoàn thành các TODO để đạt đủ 12 tiêu chí trong README.md, rồi k
 
 Bản khung này chạy được (uvicorn app.main:app) nhưng chưa đạt tiêu chí nào.
 """
+"""
+Production AI Agent — Part 6 Final Project
+"""
+import json
 import logging
+import signal
+import sys
+import time
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.auth import verify_api_key
+from app.config import settings
+from app.cost_guard import check_budget, record_cost
+from app.rate_limiter import check_rate_limit
+from app.redis_client import redis_healthy
 from utils.mock_llm import ask as llm_ask
 
-# TODO (tiêu chí 10 — Structured logging):
-#   Mỗi dòng log của app phải là 1 JSON object hợp lệ, vd
-#   {"ts": "...", "lvl": "INFO", "event": "request", "path": "/ask", "status": 200, "ms": 12.3}
-#   Gợi ý: tự viết logging.Formatter dùng json.dumps.
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Production AI Agent")
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        log_obj = {
+            "ts": self.formatTime(record, self.datefmt),
+            "lvl": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if hasattr(record, "props") and isinstance(record.props, dict):
+            log_obj.update(record.props)
+        return json.dumps(log_obj)
+
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(JsonFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+logger = logging.getLogger("app")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Graceful shutdown handler for SIGTERM
+    logger.info("Application starting up", extra={"props": {"event": "startup"}})
+    yield
+    logger.info("Application shutting down", extra={"props": {"event": "shutdown"}})
+
+
+app = FastAPI(title="Production AI Agent", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
+    user_id: str | None = None
 
 
-# TODO (tiêu chí 4): GET /health — liveness: luôn trả 200 khi process còn chạy
-#                    (kể cả khi Redis chưa kết nối được)
-# TODO (tiêu chí 5): GET /ready  — readiness: 200 khi sẵn sàng, 503 khi Redis không kết nối được
+@app.get("/health")
+def health():
+    return {"status": "ok", "environment": settings.environment}
+
+
+@app.get("/ready")
+def ready():
+    if not redis_healthy():
+        raise HTTPException(status_code=503, detail="Redis connection failed")
+    return {"ready": True, "environment": settings.environment}
 
 
 @app.post("/ask")
-def ask(body: AskRequest):
-    # TODO (tiêu chí 6): bắt buộc header X-API-Key → thêm Depends(verify_api_key)
-    # TODO (tiêu chí 7): check_rate_limit(...) → 429 khi vượt giới hạn
-    # TODO (tiêu chí 8): check_budget() trước khi gọi LLM, record_cost(...) sau khi gọi → 402 khi hết budget
-    answer = llm_ask(body.question)
-    return {"question": body.question, "answer": answer}
+def ask(
+    request: Request,
+    body: AskRequest | None = None,
+    question: str | None = None,
+    api_key: str = Depends(verify_api_key),
+):
+    q = None
+    if body and body.question:
+        q = body.question
+    elif question:
+        q = question
+    else:
+        # Check query param directly
+        q = request.query_params.get("question")
 
+    if not q:
+        raise HTTPException(status_code=400, detail="Missing question")
 
-# TODO (tiêu chí 11 — Graceful shutdown):
-#   Khi nhận SIGTERM: ngừng nhận request mới, xử lý xong request đang chạy rồi thoát (exit code 0).
-#   Gợi ý: dùng lifespan của FastAPI để dọn dẹp. Nếu tự đăng ký signal handler cho SIGTERM thì
-#   phải gọi lại handler cũ của uvicorn, nếu không process sẽ không bao giờ tắt.
+    check_rate_limit(api_key)
+    check_budget()
+
+    start = time.time()
+    answer = llm_ask(q)
+    duration_ms = (time.time() - start) * 1000
+
+    in_tokens = max(1, len(q.split()) * 2)
+    out_tokens = max(1, len(answer.split()) * 2)
+    cost = record_cost(in_tokens, out_tokens)
+
+    logger.info(
+        "Processed ask request",
+        extra={
+            "props": {
+                "event": "ask",
+                "status": 200,
+                "ms": round(duration_ms, 2),
+                "cost_usd": cost,
+            }
+        },
+    )
+    return {"question": q, "answer": answer}
