@@ -44,22 +44,17 @@
 - **Lý do:** `requirements.txt` ít thay đổi hơn mã nguồn. Khi sửa code Python, Docker tái sử dụng cache layer của bước cài thư viện thay vì cài lại từ đầu.
 
 ### Exercise 2.3: Image Size Comparison
-Kết quả đo thực tế bằng `docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"` trên Docker 29.5.3:
+Kết quả đo thực tế bằng `docker build` và `docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"` trên Docker 29.5.3:
 
 ```text
 REPOSITORY             TAG           SIZE
-production-agent       latest        261MB
+agent-production       latest        240MB
 agent-develop          latest        1.67GB
-prom/prometheus        v3.16.0       389MB
-jaegertracing/jaeger   2.23.0        180MB
-locustio/locust        2.47.0        385MB
-grafana/grafana        13.2.4        1.94GB
-nginx                  1.28-alpine   93.4MB
 ```
 
 - **Develop (`02-docker/develop/Dockerfile`, single-stage `python:3.11`):** `1.67 GB` (~1670 MB)
-- **Production multi-stage (`python:3.11-slim`):** `261 MB` (`production-agent`) và `56 MB` (image `06-lab-complete` do `check_production_ready.py` đo bằng Docker API)
-- **Chênh lệch:** Giảm từ `1.67 GB` xuống `261 MB` (**giảm 84.4%** dung lượng).
+- **Production (`02-docker/production/Dockerfile`, multi-stage `python:3.11-slim`):** `240 MB`
+- **Chênh lệch:** Giảm `~1.43 GB` (**giảm 85.6%** dung lượng). Ngoài ra image Part 6 (`06-lab-complete`) được `check_production_ready.py` đo qua Docker API đạt `56 MB` (< 500 MB).
 
 ### Exercise 2.4: Multi-Service Stack (Docker Compose)
 - Sơ đồ kiến trúc stack trong `02-docker/production/docker-compose.yml`:
